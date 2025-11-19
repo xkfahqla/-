@@ -3,25 +3,61 @@ import random, math
 from ursina.prefabs.first_person_controller import FirstPersonController
 app=Ursina()
 player=FirstPersonController()
-player.position=(3,1,3)
-player.cursor.visible=Entity(
-    model="sphere",
-    scale=1,
-    color=color.white,
-    parent=camera,
-    collider='box'
-)
+player.position=(3,0,3)
+player.cursor.visible=False
 player.gravity=1
 player.speed=10
 player.collider = 'box'
 def input(key):
     if key=='escape':
         application.quit()
+    if key=="q":
+        drop_box=Entity(
+            model='cube',
+            scale=1,
+            position=(player.x,player.y-1,player.z),
+            color=color.red,
+            collider='box',
+        )
+        drop_box.gravity=10
+        try:
+            if drop_box.intersects(Floor).hit:
+                destroy(drop_box)
+        except Exception:
+            pass
+    if key=="e":
+        player.y-=1
+    if key=="q":
+        player.y+=1
+    if key=="r":
+        drop_box=Entity(
+            model='cube',
+            scale=1,
+            position=(player.x,player.y-1,player.z),
+            color=color.red,
+            collider='box'
+        )
+        drop_box.gravity=10
+        try:
+            if drop_box.intersects(Floor).hit:
+                destroy(drop_box)
+        except Exception:
+            pass
 Earth=[
-    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
-    [0,1,1,0,1,0,1,0,1,1,0,1,1,0,1,0,1,0,1,1,0,1,1,1,0,1,0,1,1],
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-    [1,0,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
     [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
     ]
 for i in range(len(Earth)):
@@ -37,6 +73,7 @@ for i in range(len(Earth)):
                 color=color.white,
                 collider='box'
             )
+        """
         if A==2:
             drop_box=Entity(
                 model='cube',
@@ -51,6 +88,7 @@ for i in range(len(Earth)):
                     destroy(drop_box)
             except Exception:
                 pass
+        """
         if A==3:
             Wall=Entity(
                 model='wireframe_cube',
