@@ -79,5 +79,7 @@ def detect_persona_realtime(window_log):
 """
 def update():
     for cuby in cb:
-        cuby.gravity=5
+        cuby.drop()
+        if cuby.position.y <1:
+            destroy(cuby)
 app.run()
