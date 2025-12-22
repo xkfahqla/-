@@ -11,6 +11,7 @@ player.speed=10
 player.collider='box'
 d = random.choice([0,1,2])
 cb=[]
+limmove=15
 def input(key):
     if key=='escape':
         application.quit()
@@ -22,8 +23,7 @@ def input(key):
             color=color.white,
             collider='box'
         )
-        cuby.gravity=5
-        cuby.append(cb)
+        cb.append(cuby)
     if key=='q':
         if player.intersects(cuby):
             destroy(cuby)
@@ -75,4 +75,7 @@ def detect_persona_realtime(window_log):
     if f['unique_actions'] < 3: return 'Analyst'
     if f['completes']>0 and f['restarts']<3: return 'Verifier'
     return 'Neutral'
+def update():
+    for cuby in cb:
+        cuby.gravity=5
 app.run()
