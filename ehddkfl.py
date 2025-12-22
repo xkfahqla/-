@@ -69,12 +69,14 @@ for i in range(len(Earth)):
                 collider='box'
             )
         underworld.append(A)
+"""
 def detect_persona_realtime(window_log):
     vec, f = feature_vector_from_log(window_log)
     if f['pos_ratio'] > 0.6: return 'Explorer'
     if f['unique_actions'] < 3: return 'Analyst'
     if f['completes']>0 and f['restarts']<3: return 'Verifier'
     return 'Neutral'
+"""
 def update():
     for cuby in cb:
         cuby.gravity=5
