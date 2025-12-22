@@ -10,9 +10,25 @@ player.gravity=1
 player.speed=10
 player.collider='box'
 d = random.choice([0,1,2])
+cb=[]
 def input(key):
     if key=='escape':
         application.quit()
+    if key=='e':
+        cuby=Entity(
+            model='cube',
+            scale=1,
+            position=(player.position.x,player.position.y+10,player.position.z),
+            color=color.white,
+            collider='box'
+        )
+        cuby.gravity=5
+        cuby.append(cb)
+    if key=='q':
+        if player.intersects(cuby):
+            destroy(cuby)
+    if key=='r':
+        cb.clear()
 underworld=[]
 Earth=[
     [d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d,d],
