@@ -4,11 +4,11 @@ from ursina.prefabs.first_person_controller import FirstPersonController
 from 추구미2 import feature_vector_from_log
 app=Ursina()
 player=FirstPersonController()
-player.position=(3,20,3)
+player.position=(3,10,3)
 player.cursor.visible=False
 player.gravity=1
 player.speed=10
-player.collider = 'box'
+player.collider='box'
 d = random.choice([0,1,2])
 def input(key):
     if key=='escape':
