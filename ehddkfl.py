@@ -47,7 +47,7 @@ for i in range(len(Earth)):
         if A==2:
             Wall=Entity(
                 model='cube',
-                scale=(1,random.choice(i,i*j),1),
+                scale=(1,random.random(),1),
                 position=(i,1,j),
                 color=color.white,
                 collider='box'
