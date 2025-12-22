@@ -1,6 +1,8 @@
 from ursina import *
 import random, math
 from ursina.prefabs.first_person_controller import FirstPersonController
+
+from 추구미2 import feature_vector_from_log
 app=Ursina()
 player=FirstPersonController()
 player.position=(3,0,3)
@@ -49,4 +51,10 @@ for i in range(len(Earth)):
                 color=color.white,
                 collider='box'
             )
+def detect_persona_realtime(window_log):
+    vec, f = feature_vector_from_log(window_log)
+    if f['pos_ratio'] > 0.6: return 'Explorer'
+    if f['unique_actions'] < 3: return 'Analyst'
+    if f['completes']>0 and f['restarts']<3: return 'Verifier'
+    return 'Neutral'
 app.run()
