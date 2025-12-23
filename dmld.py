@@ -45,6 +45,117 @@ player.cursor.visible = False
 player.gravity = 1
 
 # ---------------- World containers ----------------
+
+PERSONAS = [
+    "검증가", "모험가", "분석가", "성취가", "도박사",
+    "스피드러너", "글리치탐색가", "몰입가",
+    "자기경쟁가", "예술가", "창조자", "전략가"
+]
+
+from collections import defaultdict
+import time, math
+
+persona_scores = defaultdict(float)   # 누적 점수
+persona_ema = defaultdict(float)      # 안정화된 점수
+CURRENT_PERSONA = "중립"
+LAST_CHANGE_TIME = 0
+
+EMA_ALPHA = 0.15          # 작을수록 안정적
+CHANGE_COOLDOWN = 12.0    # 최소 유지 시간(초)
+DOMINANCE_GAP = 0.18      # 2위와의 점수 차이
+
+def update_persona_scores(features, history):
+    """
+    features: {
+        avg_speed, pos_entropy, idle_ratio,
+        jump_count, risky_count, interact_count,
+        undo_count, retry_count, time_played
+    }
+    history: {
+        best_time, last_best_time
+    }
+    """
+
+    s = defaultdict(float)
+
+    # 1. 검증가 (안정·재시도·저위험)
+    s["검증가"] += (1-features["risky_count"]) * 0.4
+    s["검증가"] += features["retry_count"] * 0.3
+
+    # 2. 모험가 (공간 엔트로피↑)
+    s["모험가"] += features["pos_entropy"] * 0.6
+
+    # 3. 분석가 (속도↓ + 경로 효율)
+    s["분석가"] += (1/features["avg_speed"]) * 0.3
+    s["분석가"] += (1-features["jump_count"]) * 0.2
+
+    # 4. 성취가 (완수·완벽)
+    s["성취가"] += features["interact_count"] * 0.4
+
+    # 5. 도박사 (위험행동)
+    s["도박사"] += features["risky_count"] * 0.6
+
+    # 6. 스피드러너
+    s["스피드러너"] += features["avg_speed"] * 0.6
+
+    # 7. 글리치 탐색가
+    s["글리치탐색가"] += features["jump_count"] * 0.3
+    s["글리치탐색가"] += features["undo_count"] * 0.4
+
+    # 8. 몰입가 (정지↓ + 장시간)
+    s["몰입가"] += (1-features["idle_ratio"]) * 0.5
+    s["몰입가"] += features["time_played"] * 0.2
+
+    # 9. 자기경쟁가 (기록 갱신)
+    if history["last_best_time"] < history["best_time"]:
+        s["자기경쟁가"] += 1.0
+
+    # 10. 예술가 (비효율·퍼포먼스)
+    s["예술가"] += features["pos_entropy"] * 0.3
+    s["예술가"] += features["jump_count"] * 0.2
+
+    # 11. 창조자 (생성·편집)
+    s["창조자"] += features["undo_count"] * 0.5
+    s["창조자"] += features["interact_count"] * 0.3
+
+    # 12. 전략가 (반복 실험 + 안정성)
+    s["전략가"] += features["retry_count"] * 0.4
+    s["전략가"] += (1-features["risky_count"]) * 0.3
+
+    return s
+
+def stabilize_persona(raw_scores):
+    global CURRENT_PERSONA, LAST_CHANGE_TIME
+
+    now = time.time()
+
+    # EMA 누적
+    for p in PERSONAS:
+        persona_ema[p] = (
+            EMA_ALPHA * raw_scores[p]
+            + (1-EMA_ALPHA) * persona_ema[p]
+        )
+
+    # 상위 2개
+    ranked = sorted(persona_ema.items(), key=lambda x: x[1], reverse=True)
+    top, second = ranked[0], ranked[1]
+
+    # 조건 미달 → 변경 안 함
+    if (top[1] - second[1]) < DOMINANCE_GAP:
+        return CURRENT_PERSONA
+
+    if now - LAST_CHANGE_TIME < CHANGE_COOLDOWN:
+        return CURRENT_PERSONA
+
+    # 변경
+    if CURRENT_PERSONA != top[0]:
+        CURRENT_PERSONA = top[0]
+        LAST_CHANGE_TIME = now
+
+    return CURRENT_PERSONA
+
+# --------------------------------------------------
+
 floor_tiles = []
 walls = []
 
