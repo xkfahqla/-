@@ -498,25 +498,12 @@ def generate_area_around_player(radius=NEAR_RADIUS):
     return created
 # ------------------------------------------
 from ursina import Vec3
-def lerp_vec3(a: Vec3, b: Vec3, t: float) -> Vec3:
-    return a + (b - a) * t
-a: Vec3
-b: Vec3
-start: Vec3
-end: Vec3
-i: int
-steps: int
-persona_curve: float
-v = (b - a).normalized()
-dist = (b - a).length()
-t = (i/(steps+1)) ** persona_curve
-p = start + (end-start) * t
-def curved_lerp(start: Vec3, end: Vec3, i: int, steps: int, persona_curve: float) -> Vec3:
-    v: Vec3 = (end - start).normalized()
-    dist: float = (end - start).length()
-    t: float = (i / (steps + 1)) ** persona_curve
-    p: Vec3 = start + (end - start) * t
-    return p
+from ursina import Vec3
+
+def curved_lerp(start: Vec3, end: Vec3, i: int, steps: int, curve: float) -> Vec3:
+    t = (i / (steps + 1)) ** curve
+    return start + (end - start) * t
+
 # ---------------- Save log ----------------
 def save_log():
     try:
@@ -539,7 +526,14 @@ def update():
     global last_sample_time, adapt_time, current_persona
     dt = time.dt
     now = time.time()
-
+    
+    start_pos = player.position
+    end_pos = Vec3(10, 0, 10)
+    steps = 10
+    curve = 1.2
+    for i in range(steps):
+        p = curved_lerp(start_pos, end_pos, i, steps, curve)
+    
     # sampling (position & speed)
     if now - last_sample_time >= SAMPLE_INTERVAL:
         # compute speed from last sample if available
