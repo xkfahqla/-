@@ -659,6 +659,89 @@ signal.signal(signal.SIGINT, _sigint)
 # initialize neutral
 set_destination_for_persona('Neutral')
 
+class ChaserCube(Entity):
+    def __init__(self, player, spawn_point, speed=3.5, **kwargs):
+        super().__init__(
+            model='cube',
+            color=color.red,
+            scale=1,
+            collider='box',
+            **kwargs
+        )
+        self.player = player
+        self.spawn_point = spawn_point
+        self.speed = speed
+
+    def update(self):
+        direction = self.player.position - self.position
+        if direction.length() > 0.1:
+            move = direction.normalized() * self.speed * time.dt
+            self.position += move
+
+        # 충돌 판정
+        if self.intersects(self.player).hit:
+            self.player.position = self.spawn_point
+
+class SaboteurOrb(Entity):
+    def __init__(self, target_getter, relocate_target, speed=4.5, **kwargs):
+        super().__init__(
+            model='sphere',
+            color=color.orange,
+            scale=0.6,
+            collider='box',
+            **kwargs
+        )
+        self.get_target = target_getter
+        self.relocate_target = relocate_target
+        self.speed = speed
+
+    def update(self):
+        target = self.get_target()
+        if not target:
+            return
+
+        direction = target.position - self.position
+        if direction.length() > 0.1:
+            self.position += direction.normalized() * self.speed * time.dt
+
+        # 목적지에 먼저 도착
+        if self.intersects(target).hit:
+            self.relocate_target()
+
+goal = Entity(
+    model='sphere',
+    color=color.green,
+    scale=0.7,
+    position=(10, 0.5, 10),
+    collider='box'
+)
+
+def get_goal():
+    return goal
+
+def relocate_goal():
+    goal.position = Vec3(
+        random.randint(0, 20),
+        0.5,
+        random.randint(0, 20)
+    )
+    spawn_point = Vec3(3, 1, 3)
+
+chaser = ChaserCube(
+    player=player,
+    spawn_point=Vec3(3, 1, 3),
+    position=(0, 0.5, 0)
+)
+
+saboteur = SaboteurOrb(
+    target_getter=get_goal,
+    relocate_target=relocate_goal,
+    position=(20, 0.5, 20)
+)
+
+    
+
+
 # run
 if __name__ == '__main__':
     app.run()
