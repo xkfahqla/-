@@ -165,5 +165,6 @@ def input(key):
     if key == 'r':
         retry_count += 1
         player.position = SPAWN_POINT
-
+    if key == 'escape':
+        application.quit()
 app.run()
