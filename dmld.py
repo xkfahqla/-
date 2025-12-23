@@ -496,7 +496,27 @@ def generate_area_around_player(radius=NEAR_RADIUS):
     if created>0:
         status_text.text = f"맵 확장: 주변에 {created}개 타일 생성됨"
     return created
-
+# ------------------------------------------
+from ursina import Vec3
+def lerp_vec3(a: Vec3, b: Vec3, t: float) -> Vec3:
+    return a + (b - a) * t
+a: Vec3
+b: Vec3
+start: Vec3
+end: Vec3
+i: int
+steps: int
+persona_curve: float
+v = (b - a).normalized()
+dist = (b - a).length()
+t = (i/(steps+1)) ** persona_curve
+p = start + (end-start) * t
+def curved_lerp(start: Vec3, end: Vec3, i: int, steps: int, persona_curve: float) -> Vec3:
+    v: Vec3 = (end - start).normalized()
+    dist: float = (end - start).length()
+    t: float = (i / (steps + 1)) ** persona_curve
+    p: Vec3 = start + (end - start) * t
+    return p
 # ---------------- Save log ----------------
 def save_log():
     try:
@@ -619,7 +639,7 @@ def input(key):
             start = camera.world_position; end = b.position
             steps = 6
             for i in range(1,steps+1):
-                p = start.lerp(end, i/(steps+1))
+                p = lerp_vec3(start, end, i/(steps+1))
                 m = Entity(model='cube', position=(p.x,0.12,p.z), scale=0.18, color=color.azure)
                 invoke(destroy, m, delay=3.0)
             record_action('hint'); status_text.text="힌트(3s)"
