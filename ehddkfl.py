@@ -1,7 +1,7 @@
 from ursina import *
 import random, math
 from ursina.prefabs.first_person_controller import FirstPersonController
-from 추구미2 import feature_vector_from_log
+# from 추구미2 import feature_vector_from_log
 app=Ursina()
 player=FirstPersonController()
 player.position=(3,10,3)
