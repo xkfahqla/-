@@ -12,6 +12,8 @@ player.position = (5, 4, 5)
 player.speed = 7
 player.cursor.visible = False
 
+last_player_pos = player.position
+
 SPAWN_POINT = Vec3(5,4,5)
 
 # ---------------- Map ----------------
@@ -154,7 +156,6 @@ persona_text = Text("", position=(-0.8,0.45))
 
 # ---------------- Update ----------------
 def update():
-    speed_log.append(player.velocity.length())
     ensure_map(15)
     detect_persona()
 
@@ -173,5 +174,7 @@ def input(key):
     if key == 'r':
         retry_count += 1
         player.position = SPAWN_POINT
-
+delta = player.position - last_player_pos
+speed = delta.length() / max(time.dt, 0.001)
+speed_log.append(speed)
 app.run()
