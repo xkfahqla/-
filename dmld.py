@@ -1,47 +1,41 @@
-# persona_puzzle_game_fixed.py
+# persona_game_dynamic.py
 # Requires: pip install ursina
-# Run: python persona_puzzle_game_fixed.py
+# Run: python persona_game_dynamic.py
 
-import os
-import sys
-import time
-import math
-import random
-import json
-import traceback
-import signal
+import os, sys, time, math, random, json, traceback, signal
+from collections import deque
 
-# try importing ursina
+# try ursina import
 try:
     from ursina import *
     from ursina.prefabs.first_person_controller import FirstPersonController
 except Exception as e:
-    print("Ursina import failed. Install ursina (pip install ursina) to run the game.")
-    print("Error:", e)
+    print("Ursina import failed. Install ursina (pip install ursina). Error:", e)
     sys.exit(1)
 
-# ---------------- Config ----------------
+# ---------------- Config (튜닝하기 쉬움) ----------------
 GRID_SIZE = 28
 SPARSE_TILE_PROB = 0.40
 WALL_PROB = 0.14
 SPAWN_HEIGHT = 3.0
 CUBE_GRAVITY = 16.0
-SAMPLE_INTERVAL = 0.15
-WINDOW_SECONDS = 8.0
-EXPLORER_POS_RATIO = 0.55
-ANALYST_UNIQ_ACTIONS = 2
-MAX_SPAWNED = 60
-LOG_DIR = "logs_fixed"
+SAMPLE_INTERVAL = 0.12
+WINDOW_SECONDS = 10.0        # 슬라이딩 윈도우 길이(초)
+NEAR_RADIUS = 15             # 플레이어 주변 반경 체크 (칸)
+MIN_TILES_NEAR = 60          # 근처 타일이 이보다 작으면 생성
+MAX_SPAWNED = 80
+LOG_DIR = "logs_dynamic"
 os.makedirs(LOG_DIR, exist_ok=True)
+# ----------------------------------------------------
 
-# visual tuning
+# visual params
 DEST_PULSE_SPEED = 3.0
 DEST_PULSE_SCALE = 0.35
-DEST_RING_COUNT = 10
+DEST_RING_COUNT = 8
 
 # ---------------- App & Player ----------------
 app = Ursina()
-window.title = "Persona Puzzle (Fixed)"
+window.title = "Persona Puzzle Dynamic"
 window.color = color.rgb(18, 20, 25)
 
 player = FirstPersonController()
@@ -50,12 +44,14 @@ player.speed = 7
 player.cursor.visible = False
 player.gravity = 1
 
-# ---------------- World ----------------
+# ---------------- World containers ----------------
 floor_tiles = []
 walls = []
 
-def generate_world():
+# create initial sparse world (but we will also dynamically add)
+def generate_initial_world():
     random.seed(int(time.time()))
+    half = GRID_SIZE // 2
     for x in range(GRID_SIZE):
         for z in range(GRID_SIZE):
             if random.random() < SPARSE_TILE_PROB:
@@ -67,47 +63,68 @@ def generate_world():
                     w = Entity(model='cube', scale=(1,h,1), position=(x, h/2, z),
                                color=color.rgb(120,120,140), collider='box')
                     walls.append(w)
-
-generate_world()
+generate_initial_world()
 
 # ---------------- HUD ----------------
 persona_text = Text("Persona: Neutral", position=(-0.75, 0.45), scale=1.1)
 status_text = Text("", position=(0.6, 0.45))
-hint_text = Text("", position=(-0.75, 0.40), color=color.azure)
+info_text = Text("E spawn · Q delete · U undo · H hint · R clear · ESC save+quit", position=(-0.72, 0.41), scale=0.9, color=color.azure)
 
-welcome = Text("여기는 안전한 실험 공간입니다. 자유롭게 시도하세요!", origin=(0,0), scale=1.1, y=0.33, color=color.rgb(200,220,255))
-welcome_timer = 0.0
-WELCOME_DURATION = 6.0
-
-# ---------------- Logging ----------------
+# ---------------- Logging & sliding buffers ----------------
 log = {'positions': [], 'actions': [], 'events': [], 'start_time': time.time()}
-pos_samples = []
-action_log = []
+# sliding position samples: store (x,z,t)
+pos_buffer = deque()
+# action buffer: (action,t)
+action_buffer = deque()
+# movement speed buffer (last N samples): store instantaneous speed (units/sec)
+speed_buffer = deque()
+# counts for windowed features
+jump_buffer = deque()
+interact_buffer = deque()
+risky_buffer = deque()
 
-def record_pos():
+def sample_position():
     now = time.time()
-    pos = (round(player.x,2), round(player.z,2), now)
-    pos_samples.append(pos)
+    xz = (round(player.x,3), round(player.z,3), now)
+    pos_buffer.append(xz)
     log['positions'].append((round(player.x,4), round(player.y,4), round(player.z,4)))
-    cutoff = now - (WINDOW_SECONDS * 2)
-    while pos_samples and pos_samples[0][2] < cutoff:
-        pos_samples.pop(0)
+    # maintain window length
+    cutoff = now - (WINDOW_SECONDS)
+    while pos_buffer and pos_buffer[0][2] < cutoff:
+        pos_buffer.popleft()
 
-def record_action(a):
+def record_action(action_name):
     now = time.time()
-    action_log.append((a, now))
-    log['actions'].append(a)
-    cutoff = now - (WINDOW_SECONDS * 2)
-    while action_log and action_log[0][1] < cutoff:
-        action_log.pop(0)
+    action_buffer.append((action_name, now))
+    log['actions'].append(action_name)
+    cutoff = now - (WINDOW_SECONDS)
+    while action_buffer and action_buffer[0][1] < cutoff:
+        action_buffer.popleft()
+
+# compute instantaneous speed each time we sample (from last sample)
+last_pos_for_speed = None
+def sample_speed():
+    global last_pos_for_speed
+    now = time.time()
+    p = (player.x, player.z)
+    if last_pos_for_speed is not None:
+        dt = now - last_pos_for_speed[2] if last_pos_for_speed[2] else 1e-6
+        dist = math.hypot(p[0]-last_pos_for_speed[0], p[1]-last_pos_for_speed[1])
+        speed = dist / max(dt, 1e-6)
+        speed_buffer.append((speed, now))
+        # maintain window
+        cutoff = now - WINDOW_SECONDS
+        while speed_buffer and speed_buffer[0][1] < cutoff:
+            speed_buffer.popleft()
+    last_pos_for_speed = (p[0], p[1], now)
 
 # ---------------- Spawned boxes & undo ----------------
 spawned = []
 spawn_history = []
 
-def spawn_box_in_front():
+def spawn_box():
     if len(spawned) >= MAX_SPAWNED:
-        status_text.text = "[경고] 생성 수 제한"
+        status_text.text = "[경고] 생성 한도"
         return None
     pos = camera.world_position + camera.forward * 2.2 + Vec3(0, SPAWN_HEIGHT, 0)
     b = Entity(model='cube', scale=1, color=color.white, position=pos, collider='box')
@@ -117,30 +134,24 @@ def spawn_box_in_front():
     record_action('spawn')
     return b
 
-def undo_last_spawn():
+def undo_spawn():
     if not spawn_history:
-        status_text.text = "취소할 작업이 없습니다"
+        status_text.text = "취소할 작업 없음"
         return
     b = spawn_history.pop()
     try:
-        destroy(b)
-        spawned.remove(b)
-    except Exception:
-        pass
-    record_action('undo')
-    status_text.text = "마지막 생성 취소됨"
+        destroy(b); spawned.remove(b)
+    except: pass
+    record_action('undo'); status_text.text = "생성 취소됨"
 
-# ---------------- Safety: checkpoint & soft respawn ----------------
+# ---------------- Safety ----------------
 checkpoint = None
-
-def set_checkpoint_at(pos):
+def set_checkpoint(pos):
     global checkpoint
     try:
-        if checkpoint:
-            destroy(checkpoint)
-    except:
-        pass
-    checkpoint = Entity(model='cube', position=(pos.x, pos.y+0.2, pos.z), scale=(0.8,0.2,0.8), color=color.rgb(120,200,255))
+        if checkpoint: destroy(checkpoint)
+    except: pass
+    checkpoint = Entity(model='cube', position=(pos.x,pos.y+0.2,pos.z), scale=(0.8,0.2,0.8), color=color.rgb(120,200,255))
     log['events'].append({'t': time.time()-log['start_time'], 'name':'checkpoint_set', 'pos':(round(pos.x,2), round(pos.z,2))})
 
 def soft_respawn():
@@ -149,269 +160,315 @@ def soft_respawn():
         player.position = (dest.x, dest.y+1, dest.z)
     else:
         player.position = (GRID_SIZE//2, 4, GRID_SIZE//2)
-    status_text.text = "안전하게 리스폰되었습니다"
-    record_action('soft_respawn')
+    record_action('soft_respawn'); status_text.text = "안전 리스폰"
 
 # ---------------- Destination (Beacon) ----------------
 destination = {'beacon': None, 'ring': [], 'label': None, 'type': None}
-
 def clear_destination():
-    # safely destroy existing destination entities
     try:
-        if destination['beacon']:
-            destroy(destination['beacon'])
-    except:
-        pass
-    for r in list(destination['ring']):
+        if destination['beacon']: destroy(destination['beacon'])
+    except: pass
+    for r in list(destination['ring']): 
         try: destroy(r)
         except: pass
     destination['ring'].clear()
     try:
-        if destination['label']:
-            destroy(destination['label'])
-    except:
-        pass
-    destination['beacon'] = None
-    destination['label'] = None
-    destination['type'] = None
+        if destination['label']: destroy(destination['label'])
+    except: pass
+    destination['beacon']=None; destination['label']=None; destination['type']=None
 
 def spawn_beacon_at(pos, col=color.azure, txt="DEST"):
-    # create beacon + small ring + label
-    b = Entity(model='sphere', position=(pos.x, pos.y+1.2, pos.z), scale=0.8, color=col)
-    # arrow/orb above (simple small cone)
-    arrow = Entity(model='cone', position=(pos.x, pos.y+2.2, pos.z), scale=(0.3,0.7,0.3), color=col)
-    # ring particles
-    ring = []
+    b = Entity(model='sphere', position=(pos.x,pos.y+1.2,pos.z), scale=0.8, color=col)
+    arrow = Entity(model='cone', position=(pos.x,pos.y+2.2,pos.z), scale=(0.25,0.6,0.25), color=col)
+    ring=[]
     for i in range(DEST_RING_COUNT):
-        angle = i * (2*math.pi/DEST_RING_COUNT)
-        rpos = Vec3(pos.x + math.cos(angle)*1.0, pos.y+0.9, pos.z + math.sin(angle)*1.0)
-        dot = Entity(model='sphere', position=rpos, scale=0.08, color=col)
+        a = i*(2*math.pi/DEST_RING_COUNT)
+        dot = Entity(model='sphere', position=(pos.x+math.cos(a), pos.y+0.9, pos.z+math.sin(a)), scale=0.08, color=col)
         ring.append(dot)
-    lbl = Text(txt, world=True, position=(pos.x, pos.y+2.6, pos.z), origin=(0,0))
+    lbl = Text(txt, world=True, position=(pos.x,pos.y+2.6,pos.z), origin=(0,0))
     b.arrow = arrow
-    destination['beacon'] = b
-    destination['ring'] = ring
-    destination['label'] = lbl
+    destination['beacon']=b; destination['ring']=ring; destination['label']=lbl
     return b
 
-def pick_destination(preference='random'):
+def pick_tile(pref='random'):
     if not floor_tiles: return None
-    if preference == 'far':
-        best = None; best_d = -1
+    if pref=='far':
+        best=None; bd=-1
         for f in floor_tiles:
-            d = (Vec3(f.x,0,f.z) - camera.world_position).length()
-            if d > best_d:
-                best_d = d; best = f
+            d = (Vec3(f.x,0,f.z)-camera.world_position).length()
+            if d>bd: bd=d; best=f
         return best
-    if preference == 'center':
-        center = Vec3(GRID_SIZE/2,0,GRID_SIZE/2)
-        return min(floor_tiles, key=lambda f: (Vec3(f.x,0,f.z)-center).length())
-    # near
-    near = [f for f in floor_tiles if (Vec3(f.x,0,f.z)-camera.world_position).length() < 6]
+    if pref=='center':
+        c=Vec3(GRID_SIZE/2,0,GRID_SIZE/2)
+        return min(floor_tiles, key=lambda f: (Vec3(f.x,0,f.z)-c).length())
+    near = [f for f in floor_tiles if (Vec3(f.x,0,f.z)-camera.world_position).length() < NEAR_RADIUS]
     return random.choice(near) if near else random.choice(floor_tiles)
 
 def set_destination_for_persona(persona):
     clear_destination()
-    if persona == 'Explorer':
-        target = pick_destination('far')
-        if not target: return
-        spawn_beacon_at(Vec3(target.x, target.y, target.z), col=color.yellow, txt="Hidden Cache")
-        set_checkpoint_at(Vec3(target.x, target.y+0.5, target.z))
-        destination['type'] = 'Explorer'
-    elif persona == 'Analyst':
-        target = pick_destination('center')
-        if not target: return
-        spawn_beacon_at(Vec3(target.x, target.y, target.z), col=color.cyan, txt="Optimal Node")
-        destination['type'] = 'Analyst'
-    elif persona == 'Verifier':
-        target = pick_destination('near')
-        if not target: return
-        spawn_beacon_at(Vec3(target.x, target.y, target.z), col=color.green, txt="Safe Hub")
-        set_checkpoint_at(Vec3(target.x, target.y+0.5, target.z))
-        destination['type'] = 'Verifier'
+    if persona=='Explorer':
+        tgt = pick_tile('far'); 
+        if not tgt: return
+        spawn_beacon_at(Vec3(tgt.x,tgt.y,tgt.z), col=color.yellow, txt="Hidden Cache")
+        set_checkpoint(Vec3(tgt.x,tgt.y+0.5,tgt.z))
+        destination['type']='Explorer'
+    elif persona=='Analyst':
+        tgt = pick_tile('center')
+        if not tgt: return
+        spawn_beacon_at(Vec3(tgt.x,tgt.y,tgt.z), col=color.cyan, txt="Optimal Node")
+        destination['type']='Analyst'
+    elif persona=='Verifier':
+        tgt = pick_tile('near')
+        if not tgt: return
+        spawn_beacon_at(Vec3(tgt.x,tgt.y,tgt.z), col=color.green, txt="Safe Hub")
+        set_checkpoint(Vec3(tgt.x,tgt.y+0.5,tgt.z))
+        destination['type']='Verifier'
     else:
-        destination['type'] = 'Neutral'
+        destination['type']='Neutral'
 
-# ---------------- Mini puzzle ----------------
-active_mini = {'plate': None, 'boxes': [], 'required': 2, 'active': False}
-
-def spawn_mini_puzzle_at(center_pos):
-    clear_mini_puzzle()
-    cx, cz = int(center_pos.x), int(center_pos.z)
-    plate = Entity(model='cube', position=(cx+1, 0.02, cz), scale=(1.0, 0.04, 1.0), color=color.orange)
-    boxes = []
-    offsets = [(-1,0),(0,1),(1,1)]
-    for dx, dz in offsets:
+# ---------------- Mini-puzzle ----------------
+active_mini={'plate':None,'boxes':[],'required':2,'active':False}
+def spawn_mini(center):
+    clear_mini()
+    cx,cz = int(center.x), int(center.z)
+    plate = Entity(model='cube', position=(cx+1,0.02,cz), scale=(1.0,0.04,1.0), color=color.orange)
+    boxes=[]
+    offs=[(-1,0),(0,1),(1,1)]
+    for dx,dz in offs:
         b = Entity(model='cube', position=(cx+dx, SPAWN_HEIGHT, cz+dz), color=color.rgb(230,230,230), scale=0.9, collider='box')
-        b.vel = Vec3(0,0,0)
-        boxes.append(b)
-    active_mini['plate'] = plate
-    active_mini['boxes'] = boxes
-    active_mini['required'] = 2
-    active_mini['active'] = True
-    log['events'].append({'t': time.time()-log['start_time'], 'name':'mini_spawned', 'pos':(cx,cz)})
+        b.vel=Vec3(0,0,0); boxes.append(b)
+    active_mini['plate']=plate; active_mini['boxes']=boxes; active_mini['active']=True
+    log['events'].append({'t':time.time()-log['start_time'],'name':'mini_spawned','pos':(cx,cz)})
 
-def clear_mini_puzzle():
+def clear_mini():
     if active_mini['plate']:
         try: destroy(active_mini['plate'])
         except: pass
     for b in list(active_mini['boxes']):
         try: destroy(b)
         except: pass
-    active_mini['plate'] = None
-    active_mini['boxes'].clear()
-    active_mini['active'] = False
+    active_mini['plate']=None; active_mini['boxes'].clear(); active_mini['active']=False
 
 def check_mini_solved():
     if not active_mini['active']: return False
-    plate_pos = active_mini['plate'].position
-    count = 0
+    plate_pos=active_mini['plate'].position
+    cnt=0
     for b in active_mini['boxes']:
-        dx = abs(b.x - plate_pos.x)
-        dz = abs(b.z - plate_pos.z)
-        if dx < 0.6 and dz < 0.6 and b.y < 1.0:
-            count += 1
-    if count >= active_mini['required']:
-        t = Entity(model='sphere', position=(plate_pos.x, plate_pos.y+0.4, plate_pos.z), color=color.yellow, scale=0.4)
+        if abs(b.x-plate_pos.x)<0.6 and abs(b.z-plate_pos.z)<0.6 and b.y<1.0: cnt+=1
+    if cnt>=active_mini['required']:
+        t=Entity(model='sphere', position=(plate_pos.x,plate_pos.y+0.4,plate_pos.z), color=color.yellow, scale=0.4)
         invoke(lambda e=t: destroy(e), delay=6)
-        log['events'].append({'t': time.time()-log['start_time'], 'name':'mini_solved', 'count':count})
-        clear_mini_puzzle()
-        # next beacon spawn for same persona
-        cur_persona = detect_persona()[0]
-        set_destination_for_persona(cur_persona)
+        log['events'].append({'t':time.time()-log['start_time'],'name':'mini_solved','count':cnt})
+        clear_mini()
+        set_destination_for_persona(detect_persona()[0])
         return True
     return False
 
-# ---------------- Persona detection ----------------
-def detect_persona(window=WINDOW_SECONDS):
-    now = time.time()
-    pos_w = [p for p in pos_samples if p[2] >= now - window]
-    act_w = [a for a in action_log if a[1] >= now - window]
-    if len(pos_w) < 4 and len(act_w) < 2:
-        return ('Neutral', 'not enough data')
-    total = len(pos_w)
-    uniq = len(set((p[0], p[1]) for p in pos_w))
-    pos_ratio = uniq / max(1, total)
-    unique_actions = len(set(a[0] for a in act_w))
-    if pos_ratio >= EXPLORER_POS_RATIO and len(pos_w) >= 6:
-        return ('Explorer', f'pos_ratio={pos_ratio:.2f}')
-    if unique_actions <= ANALYST_UNIQ_ACTIONS and len(act_w) >= 3:
-        return ('Analyst', f'unique_actions={unique_actions}')
-    return ('Verifier', f'pos_ratio={pos_ratio:.2f}, actions={unique_actions}')
+# ---------------- Persona detection (고도화) ----------------
+def compute_window_features():
+    now=time.time()
+    # positions
+    pos_w = [p for p in pos_buffer]
+    total = len(pos_w) or 1
+    uniq = len(set((p[0],p[1]) for p in pos_w))
+    pos_ratio = uniq / total
+    # speed
+    speeds = [s for s,_t in speed_buffer]
+    avg_speed = sum(speeds)/len(speeds) if speeds else 0.0
+    # actions counts in window
+    actions = [a for a,_t in action_buffer]
+    unique_actions = len(set(actions))
+    jump_count = sum(1 for a,_t in action_buffer if a=='jump')
+    interact_count = sum(1 for a,_t in action_buffer if a=='interact')
+    risky_count = sum(1 for a,_t in action_buffer if a in ('risky','risky_action'))
+    # idle ratio: fraction of speed samples < small threshold
+    idle_frac = 0.0
+    if speeds:
+        idle_frac = sum(1 for v in speeds if v < 0.05) / len(speeds)
+    # return dictionary
+    return {
+        'pos_ratio': pos_ratio,
+        'avg_speed': avg_speed,
+        'unique_actions': unique_actions,
+        'jump_count': jump_count,
+        'interact_count': interact_count,
+        'risky_count': risky_count,
+        'idle_frac': idle_frac
+    }
+
+def detect_persona():
+    f = compute_window_features()
+    # heuristics -> score each persona 0..1
+    scores={}
+    # Explorer: high pos_ratio and moderate-high avg_speed
+    scores['Explorer'] = min(1.0, f['pos_ratio']*1.6 + (f['avg_speed']*0.2))
+    # Analyst: low unique_actions, low avg_speed, low risky
+    scores['Analyst'] = min(1.0, (1.0/(1.0+math.log(1+f['unique_actions']))) * (1.0 - f['risky_count']*0.1))
+    # Verifier: low risky, moderate idle (careful), many restarts (we use 'restart' action count)
+    restart_count = sum(1 for a,_t in action_buffer if a=='restart')
+    scores['Verifier'] = min(1.0, (1.0 - min(1.0, f['risky_count']*0.2)) * (0.3 + min(1.0, restart_count/3.0)))
+    # Achiever: many interacts
+    scores['Achiever'] = min(1.0, f['interact_count'] / 5.0)
+    # Gambler: risky actions and jumps
+    scores['Gambler'] = min(1.0, (f['risky_count']*0.6 + f['jump_count']*0.1))
+    # Immerser: long play (approx by having many samples + low idle)
+    scores['Immerser'] = min(1.0, (len(pos_buffer)/ (WINDOW_SECONDS*10)) + (1.0 - f['idle_frac'])*0.5)
+    # Speedrunner: high avg_speed and low unique_positions? (approx)
+    scores['Speedrunner'] = min(1.0, (f['avg_speed']*0.3) + (1.0 - f['pos_ratio'])*0.2)
+    # Creator: many undo/spawn events (count spawn & undo)
+    spawn_count = sum(1 for a in log['actions'] if a=='spawn')
+    undo_count = sum(1 for a in log['actions'] if a=='undo')
+    scores['Creator'] = min(1.0, (spawn_count/10.0) + (undo_count/5.0))
+    # pick top score
+    best = max(scores.items(), key=lambda kv: kv[1])
+    persona_label = best[0] if best[1] > 0.25 else 'Neutral'
+    # return persona and full scores + features (for logging/debug)
+    return persona_label, scores, f
 
 # ---------------- Beacon animation ----------------
 def animate_beacon(dt):
     b = destination.get('beacon')
     if not b: return
     t = time.time()
-    pulse = 1.0 + DEST_PULSE_SCALE * (0.5 + 0.5 * math.sin(t * DEST_PULSE_SPEED))
+    pulse = 1.0 + DEST_PULSE_SCALE*(0.5+0.5*math.sin(t*DEST_PULSE_SPEED))
     try:
-        b.scale = Vec3(pulse, pulse, pulse)
+        b.scale = Vec3(pulse,pulse,pulse)
     except: pass
     try:
-        if hasattr(b, 'arrow'):
+        if hasattr(b,'arrow'):
             b.arrow.rotation_y += 120 * dt
     except: pass
-    for i, dot in enumerate(destination['ring']):
+    for i,dot in enumerate(destination['ring']):
         try:
-            angle = (t * 1.5 + i * (2*math.pi/DEST_RING_COUNT))
+            angle = (t*1.2 + i*(2*math.pi/DEST_RING_COUNT))
             dot.x = b.x + math.cos(angle) * 1.0
             dot.z = b.z + math.sin(angle) * 1.0
-        except: continue
+        except: pass
+
+# ---------------- Dynamic map generation near player ----------------
+def count_floor_near(radius=NEAR_RADIUS):
+    c = Vec3(player.x,0,player.z)
+    cnt = 0
+    for f in floor_tiles:
+        if (Vec3(f.x,0,f.z) - c).length() <= radius:
+            cnt += 1
+    return cnt
+
+def generate_area_around_player(radius=NEAR_RADIUS):
+    # generate a square area centered on player (integer grid)
+    cx = int(round(player.x))
+    cz = int(round(player.z))
+    half = radius
+    created = 0
+    for x in range(cx-half, cx+half+1):
+        for z in range(cz-half, cz+half+1):
+            # skip if tile already exists at that integer pos
+            exists = any((int(f.x)==x and int(f.z)==z) for f in floor_tiles)
+            if exists: continue
+            # avoid generating hugely out-of-bounds negative coords
+            if x < -10 or z < -10 or x > 300 or z > 300: 
+                continue
+            # probabilistic floor
+            if random.random() < 0.65:
+                try:
+                    f = Entity(model='cube', scale=(1,0.08,1), position=(x, 0.0-0.04, z), color=color.light_gray, collider='box')
+                    floor_tiles.append(f); created += 1
+                except Exception:
+                    continue
+                # small chance to put a wall
+                if random.random() < 0.12:
+                    try:
+                        h = random.uniform(1.0,2.0)
+                        w = Entity(model='cube', scale=(1,h,1), position=(x,h/2,z), color=color.rgb(120,120,140), collider='box')
+                        walls.append(w)
+                    except: pass
+    if created>0:
+        status_text.text = f"맵 확장: 주변에 {created}개 타일 생성됨"
+    return created
 
 # ---------------- Save log ----------------
-def save_log_to_disk():
+def save_log():
     try:
-        log['end_time'] = time.time()
-        log['meta'] = {}
-        log['meta']['total_time'] = log['end_time'] - log['start_time']
-        log['meta']['unique_positions'] = len(set([ (x,y) for x,y,t in log['positions'] ])) if log['positions'] else 0
-        fname = time.strftime("playerlog_fixed_%Y%m%d_%H%M%S.json")
-        path = os.path.join(LOG_DIR, fname)
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(log, f, indent=2, ensure_ascii=False)
-        print("[LOG SAVED]", path)
+        log['end_time']=time.time()
+        log['meta']={'total_time':log['end_time']-log['start_time']}
+        fname=time.strftime("playerlog_dyn_%Y%m%d_%H%M%S.json")
+        path=os.path.join(LOG_DIR,fname)
+        with open(path,'w',encoding='utf-8') as f:
+            json.dump(log,f,indent=2,ensure_ascii=False)
+        print("[LOG SAVED]",path)
     except Exception as e:
-        print("[ERROR] saving log:", e)
-        traceback.print_exc()
+        print("[ERROR] save failed:",e); traceback.print_exc()
 
-# ---------------- Update & Input (Ursina hooks) ----------------
-last_sample = time.time()
-persona = 'Neutral'
-persona_reason = ''
-adapt_time = 0.0
+# ---------------- Update & Input ----------------
+last_sample_time=time.time()
+adapt_time=0.0
+current_persona='Neutral'
 
 def update():
-    global last_sample, persona, persona_reason, adapt_time, welcome_timer
+    global last_sample_time, adapt_time, current_persona
     dt = time.dt
     now = time.time()
 
-    # welcome fade
-    if 'welcome_timer' in globals():
-        welcome_timer_local = globals().get('welcome_timer', 0.0)
-        # increment and fade
-        if welcome_timer_local < WELCOME_DURATION:
-            welcome_timer_local += dt
-            alpha = max(0.0, 1.0 - welcome_timer_local / WELCOME_DURATION)
-            try:
-                welcome.color = color.rgba(200,220,255, int(255*alpha))
-            except:
-                pass
-            globals()['welcome_timer'] = welcome_timer_local
-            if welcome_timer_local >= WELCOME_DURATION:
-                try: destroy(welcome)
-                except: pass
+    # sampling (position & speed)
+    if now - last_sample_time >= SAMPLE_INTERVAL:
+        # compute speed from last sample if available
+        if pos_buffer:
+            last = pos_buffer[-1]
+            dt_pos = now - last[2] if now - last[2] > 1e-6 else 1e-6
+            dist = math.hypot(player.x - last[0], player.z - last[1])
+            speed = dist / dt_pos
+            speed_buffer.append((speed, now))
+            # maintain speed buffer window
+            while speed_buffer and speed_buffer[0][1] < now - WINDOW_SECONDS:
+                speed_buffer.popleft()
+        # sample pos
+        sample_position()
+        sample_speed()
+        last_sample_time = now
 
-    # periodic position sample
-    if now - last_sample >= SAMPLE_INTERVAL:
-        record_pos(); last_sample = now
-
-    # physics for spawned boxes (soft)
+    # simple physics for spawned boxes
     for b in list(spawned):
         try:
             b.vel.y -= CUBE_GRAVITY * dt
             b.position += b.vel * dt
-            half = b.scale_y / 2.0
+            half = b.scale_y/2.0
             if b.y - half <= 0.0:
                 b.y = 0.0 + half
                 if abs(b.vel.y) > 0.5:
                     b.vel.y = -b.vel.y * 0.08
                 else:
                     b.vel.y = 0
-                b.vel.x *= 0.98
-                b.vel.z *= 0.98
-        except Exception:
-            continue
+                b.vel.x *= 0.98; b.vel.z *= 0.98
+        except: continue
 
     # animate beacon
     animate_beacon(dt)
 
-    # persona detection throttle
+    # dynamic map generation if too few tiles near player
+    cnt_near = count_floor_near(NEAR_RADIUS)
+    if cnt_near < MIN_TILES_NEAR:
+        generate_area_around_player(NEAR_RADIUS)
+
+    # persona detect + adapt throttle
     if now - adapt_time > 2.0:
-        new_persona, reason = detect_persona()
-        if new_persona != persona:
-            persona = new_persona; persona_reason = reason; adapt_time = now
-            status_text.text = f"[Adapt] {persona} ({reason})"
-            # apply simple persona-driven changes (soft)
-            if persona == 'Explorer':
-                # make some walls disappear (softly) to encourage exploration
-                for w in walls:
-                    w.enabled = (random.random() < 0.7)
-            elif persona == 'Analyst':
-                for w in walls:
-                    w.enabled = True
-            elif persona == 'Verifier':
-                for w in walls:
-                    w.enabled = False
-            # set beacon and checkpoint
-            set_destination_for_persona(persona)
-        else:
-            if now - adapt_time > 8.0:
-                set_destination_for_persona(persona); adapt_time = now
+        persona_label, scores, feats = detect_persona()
+        if persona_label != current_persona:
+            current_persona = persona_label
+            # apply light adaptations
+            if current_persona=='Explorer':
+                for w in walls: w.enabled = (random.random() < 0.7)
+            elif current_persona=='Analyst':
+                for w in walls: w.enabled = True
+            elif current_persona=='Verifier':
+                for w in walls: w.enabled = False
+            set_destination_for_persona(current_persona)
+            log['events'].append({'t':time.time()-log['start_time'],'name':'persona_changed','persona':current_persona,'scores':scores,'feats':feats})
+            status_text.text = f"[적응] {current_persona}"
+        adapt_time = now
 
-    persona_text.text = f"Persona: {persona}"
+    persona_text.text = f"Persona: {current_persona}"
 
-    # mini puzzle solved check
+    # mini puzzle check
     if active_mini['active']:
         check_mini_solved()
 
@@ -421,76 +478,62 @@ def update():
 
 def input(key):
     if key == 'escape':
-        record_action('escape'); save_log_to_disk(); application.quit()
+        record_action('escape'); save_log(); application.quit()
     elif key == 'e':
-        b = spawn_box_in_front()
-        if b:
-            status_text.text = "상자 생성됨"
+        b = spawn_box()
+        if b: status_text.text = "상자 생성"
     elif key == 'q':
-        # nearest spawned in front delete
-        cam_pos = camera.world_position; cam_f = camera.forward
-        best = None; bd = 1e9
+        # delete nearest spawned in front
+        cam_pos = camera.world_position; cam_forward = camera.forward
+        best=None; bd=1e9
         for s in spawned:
             dvec = s.world_position - cam_pos
             d = dvec.length()
-            if d < bd and d < 3.5 and dvec.normalized().dot(cam_f) > 0.4:
-                best = s; bd = d
+            if d < bd and d < 3.5 and dvec.normalized().dot(cam_forward) > 0.4:
+                best=s; bd=d
         if best:
             try: destroy(best); spawned.remove(best)
             except: pass
-            record_action('delete'); status_text.text = "삭제됨"
+            record_action('delete'); status_text.text="삭제됨"
+    elif key == 'u':
+        undo_spawn()
     elif key == 'r':
         for s in list(spawned):
             try: destroy(s)
             except: pass
-        spawned.clear(); spawn_history.clear()
-        record_action('clear'); status_text.text = "모두 제거됨"
-    elif key == 'u':
-        undo_last_spawn()
+        spawned.clear(); spawn_history.clear(); record_action('clear'); status_text.text="모두 제거됨"
     elif key == 'h':
-        # hint line to beacon
         b = destination.get('beacon')
         if b:
             start = camera.world_position; end = b.position
             steps = 6
-            for i in range(1, steps+1):
+            for i in range(1,steps+1):
                 p = start.lerp(end, i/(steps+1))
-                m = Entity(model='cube', position=(p.x, 0.12, p.z), scale=0.18, color=color.azure)
+                m = Entity(model='cube', position=(p.x,0.12,p.z), scale=0.18, color=color.azure)
                 invoke(destroy, m, delay=3.0)
-            record_action('hint'); status_text.text = "힌트 표시(3s)"
-    elif key == 'c':
-        # test-complete mini puzzle instantly
-        if active_mini['active']:
-            plate = active_mini['plate']
-            boxes = active_mini['boxes'][:active_mini['required']]
-            for b in boxes:
-                b.position = plate.position + Vec3(0,0.5,0); b.vel = Vec3(0,-1,0)
-            record_action('cheat_complete')
+            record_action('hint'); status_text.text="힌트(3s)"
 
-# ---------------- late_update hook (Ursina supports it) ----------------
+# late_update: trigger mini when reach beacon
 def late_update():
     b = destination.get('beacon')
     if b:
-        # distance from player's camera to beacon
-        if (Vec3(b.x,b.y,b.z) - camera.world_position).length() < 2.0:
+        if (Vec3(b.x,b.y,b.z)-camera.world_position).length() < 2.0:
             if not active_mini['active']:
-                spawn_mini_puzzle_at(Vec3(b.x,b.y,b.z))
-                status_text.text = "새 퍼즐 생성됨 — 자유롭게 시도하세요!"
-                log['events'].append({'t': time.time()-log['start_time'], 'name':'beacon_reached', 'persona': destination['type']})
-                # create checkpoint at beacon
-                set_checkpoint_at(Vec3(b.x,b.y,b.z))
-                # remove beacon to encourage focus on mini puzzle
+                spawn_mini(Vec3(b.x,b.y,b.z))
+                status_text.text = "새 퍼즐 생성됨 — 자유롭게 시도!"
+                log['events'].append({'t':time.time()-log['start_time'],'name':'beacon_reached','persona':destination['type']})
+                set_checkpoint(Vec3(b.x,b.y,b.z))
                 clear_destination()
 
-# ---------------- SIGINT handler ----------------
-def on_sigint(sig, frame):
-    print("SIGINT: save log and exit")
-    save_log_to_disk(); application.quit(); sys.exit(0)
+# SIGINT save
+def _sigint(sig, frame):
+    print("SIGINT -> saving log and exit")
+    save_log(); application.quit(); sys.exit(0)
+signal.signal(signal.SIGINT, _sigint)
 
-signal.signal(signal.SIGINT, on_sigint)
-
-# ---------------- initialize neutral destination and run ----------------
+# initialize neutral
 set_destination_for_persona('Neutral')
 
+# run
 if __name__ == '__main__':
     app.run()
